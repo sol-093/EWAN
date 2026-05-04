@@ -46,7 +46,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'role' => $role,
             ]);
 
-            header('Location: index.php?page=login&registered=1');
+            setFlashToast('Registration complete. You can sign in now.', 'success');
+            header('Location: index.php?page=login');
             exit;
         }
     }

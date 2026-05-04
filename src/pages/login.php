@@ -11,7 +11,6 @@ if (isset($_SESSION['user_id'])) {
 require_once __DIR__ . '/../core/db.php';
 
 $message = '';
-$successMessage = isset($_GET['registered']) ? 'Registration complete. You can sign in now.' : '';
 $csrfToken = getCsrfToken();
 $email = '';
 
@@ -46,6 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['user_id'] = (int) $user['id'];
             $_SESSION['email'] = $user['email'];
             $_SESSION['role'] = $user['role'];
+          setFlashToast('Signed in successfully.', 'success');
             header('Location: index.php?page=home');
             exit;
         }
@@ -59,9 +59,6 @@ portalRenderAuthStart(
     'Use the same portal for student submissions, teacher review, and admin operations.'
 );
 ?>
-        <?php if ($successMessage !== ''): ?>
-          <div class="status-badge status-approved"><?php echo htmlspecialchars($successMessage, ENT_QUOTES, 'UTF-8'); ?></div>
-        <?php endif; ?>
         <form class="auth-form" method="post" action="index.php?page=login">
           <input type="hidden" name="_csrf" value="<?php echo htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8'); ?>" />
 

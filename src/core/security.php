@@ -109,3 +109,63 @@ function clearLoginFailures(string $email): void
     $key = strtolower(trim($email)) . '|' . (string) ($_SERVER['REMOTE_ADDR'] ?? '');
     unset($_SESSION['login_attempts'][$key]);
 }
+
+function setFlashToast(string $message, string $type = 'success'): void
+{
+    ensureSessionStarted();
+
+    $message = trim($message);
+    if ($message === '') {
+        return;
+    }
+
+    $allowedTypes = ['success', 'error', 'warning', 'info'];
+    if (!in_array($type, $allowedTypes, true)) {
+        $type = 'info';
+    }
+
+    if (!isset($_SESSION['flash_toasts']) || !is_array($_SESSION['flash_toasts'])) {
+        $_SESSION['flash_toasts'] = [];
+    }
+
+    $_SESSION['flash_toasts'][] = [
+        'type' => $type,
+        'message' => $message,
+    ];
+}
+
+function consumeFlashToasts(): array
+{
+    ensureSessionStarted();
+
+    $toasts = $_SESSION['flash_toasts'] ?? [];
+    unset($_SESSION['flash_toasts']);
+
+    if (!is_array($toasts)) {
+        return [];
+    }
+
+    $filtered = [];
+    foreach ($toasts as $toast) {
+        if (!is_array($toast)) {
+            continue;
+        }
+
+        $message = trim((string) ($toast['message'] ?? ''));
+        if ($message === '') {
+            continue;
+        }
+
+        $type = (string) ($toast['type'] ?? 'info');
+        if (!in_array($type, ['success', 'error', 'warning', 'info'], true)) {
+            $type = 'info';
+        }
+
+        $filtered[] = [
+            'type' => $type,
+            'message' => $message,
+        ];
+    }
+
+    return $filtered;
+}

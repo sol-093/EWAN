@@ -513,6 +513,85 @@ function portalRenderHead(string $title, string $bodyClass): void
       font-weight: 700;
     }
 
+    .toast-region {
+      position: fixed;
+      top: 1rem;
+      right: 1rem;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      width: min(24rem, calc(100vw - 2rem));
+      pointer-events: none;
+    }
+
+    .toast {
+      pointer-events: auto;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      padding: 0.95rem 1rem;
+      border-radius: 16px;
+      border: 1px solid rgba(15, 122, 90, 0.14);
+      background: rgba(255, 255, 255, 0.96);
+      box-shadow: var(--shadow-lg);
+      color: var(--ink-900);
+      transform: translateY(-10px);
+      opacity: 0;
+      animation: toast-in 180ms ease forwards;
+    }
+
+    .toast::before {
+      content: '';
+      width: 0.75rem;
+      height: 0.75rem;
+      margin-top: 0.3rem;
+      border-radius: 999px;
+      background: var(--brand-600);
+      flex: 0 0 auto;
+      box-shadow: 0 0 0 4px rgba(31, 169, 122, 0.12);
+    }
+
+    .toast-message {
+      flex: 1 1 auto;
+      font-size: 0.95rem;
+      line-height: 1.45;
+      color: var(--ink-900);
+    }
+
+    .toast-close {
+      min-width: 2rem;
+      min-height: 2rem;
+      padding: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--ink-500);
+      box-shadow: none;
+    }
+
+    .toast-close:hover,
+    .toast-close:focus-visible {
+      color: var(--ink-900);
+      background: var(--brand-50);
+      box-shadow: none;
+    }
+
+    .toast-success::before { background: var(--success-700); box-shadow: 0 0 0 4px rgba(15, 122, 90, 0.12); }
+    .toast-error::before { background: var(--danger-600); box-shadow: 0 0 0 4px rgba(185, 56, 42, 0.12); }
+    .toast-warning::before { background: var(--warning-700); box-shadow: 0 0 0 4px rgba(154, 103, 0, 0.12); }
+    .toast-info::before { background: var(--brand-600); box-shadow: 0 0 0 4px rgba(31, 169, 122, 0.12); }
+
+    @keyframes toast-in {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
     .error,
     .err {
       color: var(--danger-600);
@@ -2722,18 +2801,144 @@ function portalRenderFooter(): void
       &copy; 2026 School Records Database. Built for students, teachers, and administrators.
     </div>
   </footer>
+  <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
   <script>
     (() => {
       const nav = document.querySelector('.navbar, .public-nav');
       if (!nav) {
-        return;
+        // Continue so the toast system still initializes on auth/public pages.
       }
       const syncNavScroll = () => {
+        if (!nav) {
+          return;
+        }
         const isScrolled = window.scrollY > 6;
         nav.classList.toggle('is-scrolled', isScrolled);
         document.body.classList.toggle('nav-scrolled', isScrolled);
       };
       syncNavScroll();
+
+      const toastRegion = document.getElementById('toast-region');
+      const toastTimers = new WeakMap();
+      const observedMessages = new WeakMap();
+      const pendingMessageSync = new WeakMap();
+
+      function normalizeToastType(value) {
+        const normalized = String(value || '').toLowerCase();
+        if (normalized === 'success' || normalized === 'error' || normalized === 'warning' || normalized === 'info') {
+          return normalized;
+        }
+        return 'info';
+      }
+
+      function showToast(message, type = 'info', duration = 3500) {
+        if (!toastRegion) {
+          return;
+        }
+
+        const text = String(message || '').trim();
+        if (!text) {
+          return;
+        }
+
+        const toast = document.createElement('div');
+        const toastType = normalizeToastType(type);
+        toast.className = 'toast toast-' + toastType;
+        toast.setAttribute('role', toastType === 'error' ? 'alert' : 'status');
+
+        const messageNode = document.createElement('div');
+        messageNode.className = 'toast-message';
+        messageNode.textContent = text;
+
+        const closeButton = document.createElement('button');
+        closeButton.type = 'button';
+        closeButton.className = 'toast-close';
+        closeButton.setAttribute('aria-label', 'Dismiss notification');
+        closeButton.textContent = '×';
+        closeButton.addEventListener('click', () => dismissToast(toast));
+
+        toast.appendChild(messageNode);
+        toast.appendChild(closeButton);
+        toastRegion.appendChild(toast);
+
+        const timerId = window.setTimeout(() => dismissToast(toast), duration);
+        toastTimers.set(toast, timerId);
+      }
+
+      function dismissToast(toast) {
+        const timerId = toastTimers.get(toast);
+        if (timerId) {
+          window.clearTimeout(timerId);
+          toastTimers.delete(toast);
+        }
+        toast.remove();
+      }
+
+      function readMessageState(element) {
+        const text = String(element.textContent || '').trim();
+        const className = String(element.className || '');
+        const type = className.includes('success') ? 'success' : className.includes('error') ? 'error' : className.includes('warning') ? 'warning' : 'info';
+        return { text, type, signature: text + '|' + type };
+      }
+
+      function observeMessageElement(element) {
+        if (!(element instanceof HTMLElement) || observedMessages.has(element)) {
+          return;
+        }
+
+        let lastSignature = '';
+        const sync = () => {
+          pendingMessageSync.delete(element);
+          const state = readMessageState(element);
+          if (!state.text || state.signature === lastSignature) {
+            return;
+          }
+          lastSignature = state.signature;
+          showToast(state.text, state.type);
+        };
+
+        const scheduleSync = () => {
+          if (pendingMessageSync.get(element)) {
+            return;
+          }
+          pendingMessageSync.set(element, true);
+          window.requestAnimationFrame(sync);
+        };
+
+        observedMessages.set(element, true);
+        new MutationObserver(scheduleSync).observe(element, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['class'],
+        });
+
+        scheduleSync();
+      }
+
+      document.querySelectorAll('.message').forEach(observeMessageElement);
+
+      new MutationObserver(mutations => {
+        for (const mutation of mutations) {
+          mutation.addedNodes.forEach(node => {
+            if (!(node instanceof HTMLElement)) {
+              return;
+            }
+            if (node.matches('.message')) {
+              observeMessageElement(node);
+            }
+            node.querySelectorAll?.('.message').forEach(observeMessageElement);
+          });
+        }
+      }).observe(document.body, { childList: true, subtree: true });
+
+      const flashToasts = <?php echo json_encode(function_exists('consumeFlashToasts') ? consumeFlashToasts() : [], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+      flashToasts.forEach(toast => showToast(toast.message, toast.type));
+
+      window.portalToast = { show: showToast, dismiss: dismissToast };
+      window.showToast = showToast;
+
       window.addEventListener('scroll', syncNavScroll, { passive: true });
     })();
   </script>
