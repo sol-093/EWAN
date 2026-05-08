@@ -13,7 +13,14 @@ require_once __DIR__ . '/../core/db.php';
 $message = '';
 $csrfToken = getCsrfToken();
 $email = '';
+$fullName = '';
+$programId = 0;
+$currentYearLevel = 1;
+$currentSemester = '1st Semester';
 $agreedToTerms = false;
+$programs = $pdo->query('SELECT id, name FROM programs ORDER BY name ASC')->fetchAll();
+$allowedYearLevels = [1, 2, 3, 4];
+$allowedSemesters = ['1st Semester', '2nd Semester'];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!validateCsrfToken($_POST['_csrf'] ?? null)) {
@@ -21,12 +28,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $email = strtolower(trim($_POST['email'] ?? ''));
+    $fullName = trim((string) ($_POST['full_name'] ?? ''));
+    $programId = (int) ($_POST['program_id'] ?? 0);
+    $currentYearLevel = (int) ($_POST['current_year_level'] ?? 0);
+    $currentSemester = trim((string) ($_POST['current_semester'] ?? ''));
     $password = $_POST['password'] ?? '';
     $agreedToTerms = isset($_POST['agreement']);
     $role = 'student';
 
-    if ($message === '' && ($email === '' || $password === '')) {
+    if ($message === '' && ($email === '' || $password === '' || $fullName === '' || $programId <= 0)) {
         $message = 'All fields are required.';
+    } elseif ($message === '' && !in_array($currentYearLevel, $allowedYearLevels, true)) {
+        $message = 'Please select a valid year level.';
+    } elseif ($message === '' && !in_array($currentSemester, $allowedSemesters, true)) {
+        $message = 'Please select a valid semester.';
     } elseif ($message === '' && strlen($password) < 6) {
         $message = 'Password must be at least 6 characters.';
     } elseif ($message === '' && !$agreedToTerms) {
@@ -38,12 +53,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($checkStmt->fetch()) {
             $message = 'This email is already registered.';
         } else {
+            $programStmt = $pdo->prepare('SELECT id FROM programs WHERE id = :id LIMIT 1');
+            $programStmt->execute(['id' => $programId]);
+            if (!$programStmt->fetchColumn()) {
+                $message = 'Selected program was not found.';
+            }
+        }
+
+        if ($message === '') {
             $passwordHash = password_hash($password, PASSWORD_DEFAULT);
-            $insertStmt = $pdo->prepare('INSERT INTO users (email, password_hash, role) VALUES (:email, :password_hash, :role)');
+            $insertStmt = $pdo->prepare(
+                'INSERT INTO users (
+                    email, password_hash, role, full_name, program_id, current_year_level,
+                    current_semester, account_status
+                 )
+                 VALUES (
+                    :email, :password_hash, :role, :full_name, :program_id, :current_year_level,
+                    :current_semester, "pending"
+                 )'
+            );
             $insertStmt->execute([
                 'email' => $email,
                 'password_hash' => $passwordHash,
                 'role' => $role,
+                'full_name' => $fullName,
+                'program_id' => $programId,
+                'current_year_level' => $currentYearLevel,
+                'current_semester' => $currentSemester,
             ]);
 
             header('Location: index.php?page=login&registered=1');
@@ -65,6 +101,44 @@ portalRenderAuthStart(
           <div class="field">
             <label for="register-email">Email</label>
             <input id="register-email" name="email" type="email" placeholder="you@school.edu" value="<?php echo htmlspecialchars($email, ENT_QUOTES, 'UTF-8'); ?>" required />
+          </div>
+
+          <div class="field">
+            <label for="register-full-name">Full Name</label>
+            <input id="register-full-name" name="full_name" type="text" placeholder="Student full name" value="<?php echo htmlspecialchars($fullName, ENT_QUOTES, 'UTF-8'); ?>" required />
+          </div>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="register-program">Program</label>
+              <select id="register-program" name="program_id" required>
+                <option value="">-- Select Program --</option>
+                <?php foreach ($programs as $program): ?>
+                  <option value="<?php echo (int) $program['id']; ?>" <?php echo (int) $program['id'] === $programId ? 'selected' : ''; ?>>
+                    <?php echo htmlspecialchars((string) $program['name'], ENT_QUOTES, 'UTF-8'); ?>
+                  </option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+            <div class="field">
+              <label for="register-year">Year Level</label>
+              <select id="register-year" name="current_year_level" required>
+                <?php foreach ($allowedYearLevels as $yearLevel): ?>
+                  <option value="<?php echo $yearLevel; ?>" <?php echo $currentYearLevel === $yearLevel ? 'selected' : ''; ?>><?php echo $yearLevel; ?></option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="register-semester">Current Semester</label>
+            <select id="register-semester" name="current_semester" required>
+              <?php foreach ($allowedSemesters as $semester): ?>
+                <option value="<?php echo htmlspecialchars($semester, ENT_QUOTES, 'UTF-8'); ?>" <?php echo $currentSemester === $semester ? 'selected' : ''; ?>>
+                  <?php echo htmlspecialchars($semester, ENT_QUOTES, 'UTF-8'); ?>
+                </option>
+              <?php endforeach; ?>
+            </select>
           </div>
 
           <div class="field">
@@ -94,7 +168,7 @@ portalRenderAuthStart(
             <?php echo htmlspecialchars($message, ENT_QUOTES, 'UTF-8'); ?>
           </div>
         </form>
-        <p class="auth-footnote">New registrations are created as student accounts and can be updated later by administrators.</p>
+        <p class="auth-footnote">New registrations are reviewed by a teacher or administrator before the account can sign in.</p>
         <div class="modal-backdrop" id="terms-modal" role="dialog" aria-modal="true" aria-labelledby="terms-title">
           <div class="modal">
             <div class="modal-head">
@@ -108,7 +182,7 @@ portalRenderAuthStart(
               <p>By creating an account, you agree to use the School Records Database for legitimate academic purposes only.</p>
               <ul>
                 <li>You must provide accurate account and student profile information.</li>
-                <li>Your account details may be used for registration, academic profile setup, grade submission, teacher review, and administrative management.</li>
+                <li>Your account details may be used for registration, account verification, grade submission, teacher review, and administrative management.</li>
                 <li>You are responsible for keeping your login credentials private.</li>
                 <li>Submitted grades and academic records may be reviewed by authorized teachers and administrators.</li>
                 <li>Misuse of the portal, false information, or unauthorized access may result in account restriction.</li>

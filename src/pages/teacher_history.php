@@ -58,11 +58,12 @@ portalRenderStart(
         </div>
       </div>
       <div id="grade-history"></div>
+      <div id="history-pagination" class="row" style="margin-top:0.85rem;"></div>
       <div id="history-message" class="message"></div>
     </section>
   <script>
     const csrfToken = <?php echo json_encode($csrfToken); ?>;
-    const state = { items: [] };
+    const state = { items: [], visibleItems: [], page: 1, perPage: 10 };
 
     async function api(action) {
       const response = await fetch('index.php?page=api&action=' + encodeURIComponent(action));
@@ -111,16 +112,42 @@ portalRenderStart(
       }));
     }
 
+    function paginate(items) {
+      const totalPages = Math.max(1, Math.ceil(items.length / state.perPage));
+      state.page = Math.min(Math.max(1, state.page), totalPages);
+      const start = (state.page - 1) * state.perPage;
+      return { totalPages, pageItems: items.slice(start, start + state.perPage) };
+    }
+
+    function renderPagination(totalPages, totalItems) {
+      const el = document.getElementById('history-pagination');
+      if (totalItems <= state.perPage) {
+        el.innerHTML = '';
+        return;
+      }
+      el.innerHTML =
+        '<button class="compact btn-secondary" onclick="changePage(-1)" ' + (state.page <= 1 ? 'disabled' : '') + '>Previous</button>' +
+        '<span class="small">Page ' + state.page + ' of ' + totalPages + '</span>' +
+        '<button class="compact btn-secondary" onclick="changePage(1)" ' + (state.page >= totalPages ? 'disabled' : '') + '>Next</button>';
+    }
+
+    function changePage(delta) {
+      state.page += delta;
+      renderHistory(state.visibleItems);
+    }
+
     function renderHistory(items) {
       const container = document.getElementById('grade-history');
       if (!items.length) {
         const query = getStudentSearchQuery();
         container.innerHTML = '<p class="small">' + (query ? 'No submissions match that student name.' : 'No grade submissions yet.') + '</p>';
+        renderPagination(1, 0);
         return;
       }
 
-      container.innerHTML = '<div class="table-responsive"><table><thead><tr><th>Student</th><th>Program</th><th>Course</th><th>Semester</th><th>Grade</th><th>Status</th><th>Record</th><th>Last Updated</th></tr></thead><tbody>' +
-        items.map(item =>
+      const { totalPages, pageItems } = paginate(items);
+      container.innerHTML = '<div class="table-responsive"><table><thead><tr><th>Student</th><th>Program</th><th>Course</th><th>Semester</th><th>Grade</th><th>Status</th><th>Feedback</th><th>Appeal</th><th>Record</th><th>Last Updated</th></tr></thead><tbody>' +
+        pageItems.map(item =>
           '<tr>' +
             '<td>' + escapeHtml(item.student_name) + '</td>' +
             '<td>' + escapeHtml(item.program_name) + '</td>' +
@@ -128,11 +155,14 @@ portalRenderStart(
             '<td>' + escapeHtml(item.semester) + '</td>' +
             '<td>' + escapeHtml(item.grade) + '</td>' +
             '<td>' + renderStatusBadge(item.status) + '</td>' +
+            '<td>' + (item.teacher_feedback ? escapeHtml(item.teacher_feedback) : '<span class="small">None</span>') + '</td>' +
+            '<td>' + (item.appeal_message ? '<strong>' + escapeHtml(item.appeal_status || 'pending') + '</strong><br><span class="small">' + escapeHtml(item.appeal_message) + '</span>' : '<span class="small">None</span>') + '</td>' +
             '<td>' + escapeHtml(item.record_type === 'previous' ? 'Previous' : 'Current') + '</td>' +
             '<td>' + renderDate(item.updated_at) + '</td>' +
           '</tr>'
         ).join('') +
       '</tbody></table></div>';
+      renderPagination(totalPages, items.length);
     }
 
     function getStudentSearchQuery() {
@@ -159,6 +189,7 @@ portalRenderStart(
     }
 
     function applyStudentSearch() {
+      state.page = 1;
       const query = getStudentSearchQuery();
       const status = getStatusFilter();
       const order = getDateOrder();
@@ -170,7 +201,8 @@ portalRenderStart(
           const diff = getTimeValue(a.updated_at) - getTimeValue(b.updated_at);
           return order === 'asc' ? diff : -diff;
         });
-      renderHistory(filtered);
+      state.visibleItems = filtered;
+      renderHistory(state.visibleItems);
     }
 
     async function refresh() {

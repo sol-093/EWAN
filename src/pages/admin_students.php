@@ -24,29 +24,28 @@ portalRenderStart(
     $email,
     'admin',
     'Student accounts',
-    'Review student records separately so profile setup, programs, and current terms are easier to manage.'
+    'Verify student accounts after students submit their own registration details.'
 );
 ?>
     <section>
       <div class="section-head">
         <div>
           <h2>Student Directory</h2>
-          <p class="section-copy">Manage student role assignments and update academic profiles without mixing them with staff accounts.</p>
+          <p class="section-copy">Students enter their profile during registration; administrators verify access here.</p>
         </div>
       </div>
       <div class="table-responsive">
         <table>
-          <thead><tr><th>Email</th><th>Role</th><th>Student Profile</th><th>Created</th><th>Action</th></tr></thead>
+          <thead><tr><th>Email</th><th>Status</th><th>Student Profile</th><th>Created</th><th>Action</th></tr></thead>
           <tbody id="students-table"></tbody>
         </table>
       </div>
+      <div id="students-pagination" class="row" style="margin-top:0.85rem;"></div>
       <div id="admin-students-message" class="message"></div>
     </section>
   <script>
     const csrfToken = <?php echo json_encode($csrfToken); ?>;
-    const state = { users: [], programs: [] };
-    const yearLevels = [1, 2, 3, 4];
-    const semesterOptions = ['1st Semester', '2nd Semester'];
+    const state = { users: [], page: 1, perPage: 10 };
 
     async function api(action, method = 'GET', payload = null) {
       let url = 'index.php?page=api&action=' + encodeURIComponent(action);
@@ -84,63 +83,58 @@ portalRenderStart(
       el.className = 'message ' + (ok ? 'success' : 'error');
     }
 
-    function renderProgramOptions(selectedProgramId) {
-      return '<option value="">-- Select Program --</option>' + state.programs.map(program =>
-        '<option value="' + program.id + '"' + (Number(program.id) === Number(selectedProgramId) ? ' selected' : '') + '>' + escapeHtml(program.name) + '</option>'
-      ).join('');
+    function renderStatusBadge(status) {
+      const normalized = String(status || 'pending').toLowerCase();
+      let className = 'status-badge status-pending';
+      if (normalized === 'verified') {
+        className = 'status-badge status-approved';
+      } else if (normalized === 'rejected') {
+        className = 'status-badge status-rejected';
+      }
+      return '<span class="' + className + '">' + escapeHtml(normalized) + '</span>';
     }
 
     function renderStudents() {
       const tbody = document.getElementById('students-table');
       if (!state.users.length) {
         tbody.innerHTML = '<tr><td colspan="5">No student accounts found.</td></tr>';
+        document.getElementById('students-pagination').innerHTML = '';
         return;
       }
 
-      tbody.innerHTML = state.users.map(user => {
-        const roleHtml = '<select id="role-user-' + user.id + '">' +
-          '<option value="student" selected>STUDENT</option>' +
-          '<option value="teacher">TEACHER</option>' +
-          '<option value="admin">ADMIN</option>' +
-        '</select>';
+      const totalPages = Math.max(1, Math.ceil(state.users.length / state.perPage));
+      state.page = Math.min(Math.max(1, state.page), totalPages);
+      const pageUsers = state.users.slice((state.page - 1) * state.perPage, state.page * state.perPage);
 
-        const profileHtml = '<div class="row">' +
-          '<input id="student-name-' + user.id + '" type="text" placeholder="Full name" value="' + escapeHtml(user.full_name || '') + '" />' +
-          '<select id="student-program-' + user.id + '">' + renderProgramOptions(user.program_id) + '</select>' +
-          '<select id="student-year-' + user.id + '">' + yearLevels.map(level => '<option value="' + level + '"' + (Number(user.current_year_level) === level ? ' selected' : '') + '>' + level + '</option>').join('') + '</select>' +
-          '<select id="student-semester-' + user.id + '">' + semesterOptions.map(semester => '<option value="' + semester + '"' + (user.current_semester === semester ? ' selected' : '') + '>' + escapeHtml(semester) + '</option>').join('') + '</select>' +
-        '</div>';
+      tbody.innerHTML = pageUsers.map(user => {
+        const profileHtml = '<strong>' + escapeHtml(user.full_name || 'No name') + '</strong><br>' +
+          '<span class="small">' + escapeHtml(user.program_name || 'No program') + ' | Year ' + escapeHtml(user.current_year_level || '') + ' | ' + escapeHtml(user.current_semester || '') + '</span>';
 
         const actionHtml =
           '<div class="table-actions">' +
-            '<button class="compact" onclick="updateUserRole(' + user.id + ')">Save Role</button>' +
-            '<button class="compact" onclick="updateStudentProfile(' + user.id + ')">Save Profile</button>' +
+            '<button class="compact" onclick="verifyAccount(' + user.id + ', \'verified\')">Verify</button>' +
+            '<button class="compact danger" onclick="verifyAccount(' + user.id + ', \'rejected\')">Reject</button>' +
           '</div>';
 
-        return '<tr><td>' + escapeHtml(user.email) + '</td><td>' + roleHtml + '</td><td>' + profileHtml + '</td><td>' + escapeHtml(user.created_at) + '</td><td>' + actionHtml + '</td></tr>';
+        return '<tr><td>' + escapeHtml(user.email) + '</td><td>' + renderStatusBadge(user.account_status) + '</td><td>' + profileHtml + '</td><td>' + escapeHtml(user.created_at) + '</td><td>' + actionHtml + '</td></tr>';
       }).join('');
+
+      const pager = document.getElementById('students-pagination');
+      pager.innerHTML = state.users.length <= state.perPage ? '' :
+        '<button class="compact btn-secondary" onclick="changePage(-1)" ' + (state.page <= 1 ? 'disabled' : '') + '>Previous</button>' +
+        '<span class="small">Page ' + state.page + ' of ' + totalPages + '</span>' +
+        '<button class="compact btn-secondary" onclick="changePage(1)" ' + (state.page >= totalPages ? 'disabled' : '') + '>Next</button>';
     }
 
-    async function updateUserRole(userId) {
-      try {
-        await api('update_user_role', 'POST', { user_id: userId, role: document.getElementById('role-user-' + userId).value });
-        setMessage('Student role updated.', true);
-        await refresh();
-      } catch (error) {
-        setMessage(error.message);
-      }
+    function changePage(delta) {
+      state.page += delta;
+      renderStudents();
     }
 
-    async function updateStudentProfile(userId) {
+    async function verifyAccount(userId, status) {
       try {
-        await api('update_student_profile', 'POST', {
-          user_id: userId,
-          full_name: document.getElementById('student-name-' + userId).value.trim(),
-          program_id: Number(document.getElementById('student-program-' + userId).value),
-          current_year_level: Number(document.getElementById('student-year-' + userId).value),
-          current_semester: document.getElementById('student-semester-' + userId).value
-        });
-        setMessage('Student profile updated.', true);
+        await api('verify_account', 'POST', { user_id: userId, status });
+        setMessage('Account verification updated.', true);
         await refresh();
       } catch (error) {
         setMessage(error.message);
@@ -148,8 +142,6 @@ portalRenderStart(
     }
 
     async function refresh() {
-      const bootstrap = await api('bootstrap');
-      state.programs = bootstrap.programs || [];
       const users = await api('list_users', 'GET', { role: 'student' });
       state.users = users.users || [];
       renderStudents();

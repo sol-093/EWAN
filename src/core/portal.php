@@ -20,7 +20,7 @@ function portalNavItems(string $role): array
         }
         $items[] = ['key' => 'teacher-dashboard', 'label' => 'Dashboard', 'href' => 'index.php?page=teacher_dashboard'];
         $items[] = ['key' => 'teacher-queue', 'label' => 'Queue', 'href' => 'index.php?page=teacher_queue'];
-        $items[] = ['key' => 'teacher-placement', 'label' => 'Placement', 'href' => 'index.php?page=teacher_placement'];
+        $items[] = ['key' => 'teacher-placement', 'label' => 'Accounts', 'href' => 'index.php?page=teacher_placement'];
         $items[] = ['key' => 'teacher-history', 'label' => 'Grade History', 'href' => 'index.php?page=teacher_history'];
     }
 

@@ -40,11 +40,12 @@ portalRenderStart(
           <tbody id="staff-table"></tbody>
         </table>
       </div>
+      <div id="staff-pagination" class="row" style="margin-top:0.85rem;"></div>
       <div id="admin-staff-message" class="message"></div>
     </section>
   <script>
     const csrfToken = <?php echo json_encode($csrfToken); ?>;
-    const state = { users: [] };
+    const state = { users: [], page: 1, perPage: 10 };
 
     async function api(action, method = 'GET', payload = null) {
       let url = 'index.php?page=api&action=' + encodeURIComponent(action);
@@ -91,11 +92,15 @@ portalRenderStart(
       const tbody = document.getElementById('staff-table');
       if (!state.users.length) {
         tbody.innerHTML = '<tr><td colspan="6">No staff accounts found.</td></tr>';
+        document.getElementById('staff-pagination').innerHTML = '';
         return;
       }
 
       const roleOptions = ['teacher', 'admin', 'student'];
-      tbody.innerHTML = state.users.map(user => {
+      const totalPages = Math.max(1, Math.ceil(state.users.length / state.perPage));
+      state.page = Math.min(Math.max(1, state.page), totalPages);
+      const pageUsers = state.users.slice((state.page - 1) * state.perPage, state.page * state.perPage);
+      tbody.innerHTML = pageUsers.map(user => {
         const roleHtml = '<select id="role-user-' + user.id + '">' + roleOptions.map(role =>
           '<option value="' + role + '"' + (user.role === role ? ' selected' : '') + '>' + role.toUpperCase() + '</option>'
         ).join('') + '</select>';
@@ -108,6 +113,17 @@ portalRenderStart(
           '</div>';
         return '<tr><td>' + escapeHtml(user.email) + '</td><td>' + renderRoleBadge(user.role) + '</td><td>' + roleHtml + '</td><td>' + affiliationHtml + '</td><td>' + escapeHtml(user.created_at) + '</td><td>' + actionsHtml + '</td></tr>';
       }).join('');
+
+      const pager = document.getElementById('staff-pagination');
+      pager.innerHTML = state.users.length <= state.perPage ? '' :
+        '<button class="compact btn-secondary" onclick="changePage(-1)" ' + (state.page <= 1 ? 'disabled' : '') + '>Previous</button>' +
+        '<span class="small">Page ' + state.page + ' of ' + totalPages + '</span>' +
+        '<button class="compact btn-secondary" onclick="changePage(1)" ' + (state.page >= totalPages ? 'disabled' : '') + '>Next</button>';
+    }
+
+    function changePage(delta) {
+      state.page += delta;
+      renderStaff();
     }
 
     async function updateUserRole(userId) {

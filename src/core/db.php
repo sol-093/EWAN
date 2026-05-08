@@ -33,6 +33,16 @@ try {
                     email VARCHAR(255) NOT NULL UNIQUE,
                     password_hash VARCHAR(255) NOT NULL,
                     role ENUM('student', 'teacher', 'admin') NOT NULL DEFAULT 'student',
+                    full_name VARCHAR(150) NULL,
+                    program_id INT NULL,
+                    current_year_level TINYINT NULL,
+                    current_semester VARCHAR(20) NULL,
+                    staff_affiliation VARCHAR(180) NULL,
+                    account_status ENUM('pending', 'verified', 'rejected') NOT NULL DEFAULT 'pending',
+                    verified_by INT NULL,
+                    verified_at TIMESTAMP NULL,
+                    reset_token_hash VARCHAR(255) NULL,
+                    reset_token_expires_at TIMESTAMP NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )"
             );
@@ -61,6 +71,11 @@ $pdo->exec(
         current_year_level TINYINT NULL,
         current_semester VARCHAR(20) NULL,
         staff_affiliation VARCHAR(180) NULL,
+        account_status ENUM('pending', 'verified', 'rejected') NOT NULL DEFAULT 'pending',
+        verified_by INT NULL,
+        verified_at TIMESTAMP NULL,
+        reset_token_hash VARCHAR(255) NULL,
+        reset_token_expires_at TIMESTAMP NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )"
 );
@@ -71,6 +86,11 @@ $userColumnMigrations = [
     "ALTER TABLE users ADD COLUMN current_year_level TINYINT NULL AFTER program_id",
     "ALTER TABLE users ADD COLUMN current_semester VARCHAR(20) NULL AFTER current_year_level",
     "ALTER TABLE users ADD COLUMN staff_affiliation VARCHAR(180) NULL AFTER current_semester",
+    "ALTER TABLE users ADD COLUMN account_status ENUM('pending', 'verified', 'rejected') NOT NULL DEFAULT 'verified' AFTER staff_affiliation",
+    "ALTER TABLE users ADD COLUMN verified_by INT NULL AFTER account_status",
+    "ALTER TABLE users ADD COLUMN verified_at TIMESTAMP NULL AFTER verified_by",
+    "ALTER TABLE users ADD COLUMN reset_token_hash VARCHAR(255) NULL AFTER verified_at",
+    "ALTER TABLE users ADD COLUMN reset_token_expires_at TIMESTAMP NULL AFTER reset_token_hash",
 ];
 
 foreach ($userColumnMigrations as $statement) {
@@ -128,6 +148,9 @@ $pdo->exec(
         grade DECIMAL(3,2) NOT NULL,
         semester VARCHAR(30) NOT NULL DEFAULT '1st Year - 1st Semester',
         status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+        teacher_feedback TEXT NULL,
+        appeal_message TEXT NULL,
+        appeal_status ENUM('none', 'pending', 'resolved') NOT NULL DEFAULT 'none',
         submitted_by INT NOT NULL,
         reviewed_by INT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -150,6 +173,9 @@ $pdo->exec(
         grade DECIMAL(3,2) NOT NULL,
         semester VARCHAR(30) NOT NULL DEFAULT '1st Year - 1st Semester',
         status ENUM('approved', 'rejected') NOT NULL,
+        teacher_feedback TEXT NULL,
+        appeal_message TEXT NULL,
+        appeal_status ENUM('none', 'pending', 'resolved') NOT NULL DEFAULT 'none',
         submitted_by INT NOT NULL,
         reviewed_by INT NULL,
         original_created_at TIMESTAMP NULL,
@@ -181,6 +207,25 @@ $courseColumnMigrations = [
 ];
 
 foreach ($courseColumnMigrations as $statement) {
+    try {
+        $pdo->exec($statement);
+    } catch (PDOException $e) {
+        if ($e->getCode() !== '42S21' && !str_contains($e->getMessage(), '1060')) {
+            throw $e;
+        }
+    }
+}
+
+$gradeSubmissionColumnMigrations = [
+    "ALTER TABLE grade_submissions ADD COLUMN teacher_feedback TEXT NULL AFTER status",
+    "ALTER TABLE grade_submissions ADD COLUMN appeal_message TEXT NULL AFTER teacher_feedback",
+    "ALTER TABLE grade_submissions ADD COLUMN appeal_status ENUM('none', 'pending', 'resolved') NOT NULL DEFAULT 'none' AFTER appeal_message",
+    "ALTER TABLE grade_submission_history ADD COLUMN teacher_feedback TEXT NULL AFTER status",
+    "ALTER TABLE grade_submission_history ADD COLUMN appeal_message TEXT NULL AFTER teacher_feedback",
+    "ALTER TABLE grade_submission_history ADD COLUMN appeal_status ENUM('none', 'pending', 'resolved') NOT NULL DEFAULT 'none' AFTER appeal_message",
+];
+
+foreach ($gradeSubmissionColumnMigrations as $statement) {
     try {
         $pdo->exec($statement);
     } catch (PDOException $e) {

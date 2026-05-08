@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/../core/security.php';
+require_once __DIR__ . '/../core/mailer.php';
 ensureSessionStarted();
 
 // Start buffering to catch any accidental output (notices/warnings)
@@ -125,7 +126,7 @@ function buildAcademicTerm(int $yearLevel, string $semester): string
 function fetchUserProfile(PDO $pdo, int $targetUserId): array
 {
     $stmt = $pdo->prepare(
-        'SELECT u.id, u.email, u.role, u.full_name, u.program_id, u.current_year_level, u.current_semester, u.staff_affiliation,
+        'SELECT u.id, u.email, u.role, u.full_name, u.program_id, u.current_year_level, u.current_semester, u.staff_affiliation, u.account_status,
                 p.name AS program_name
          FROM users u
          LEFT JOIN programs p ON p.id = u.program_id
@@ -152,6 +153,7 @@ function fetchUserProfile(PDO $pdo, int $targetUserId): array
         'current_year_level' => $yearLevel,
         'current_semester' => $semester,
         'staff_affiliation' => trim((string) ($row['staff_affiliation'] ?? '')),
+        'account_status' => (string) ($row['account_status'] ?? 'pending'),
         'current_term' => ($yearLevel > 0 && $semester !== '') ? buildAcademicTerm($yearLevel, $semester) : '',
     ];
 }
@@ -273,6 +275,7 @@ if ($action === 'list_users') {
     }
 
     $sql = 'SELECT u.id, u.email, u.role, u.full_name, u.program_id, u.current_year_level, u.current_semester, u.staff_affiliation,
+                   u.account_status, u.verified_at,
                    p.name AS program_name, u.created_at
             FROM users u
             LEFT JOIN programs p ON p.id = u.program_id';
@@ -288,7 +291,7 @@ if ($action === 'list_users') {
         $params['role'] = $roleFilter;
     }
 
-    $sql .= ' ORDER BY u.created_at DESC, u.id DESC';
+    $sql .= ' ORDER BY FIELD(u.account_status, "pending", "rejected", "verified"), u.created_at DESC, u.id DESC';
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
@@ -302,15 +305,57 @@ if ($action === 'list_student_profiles') {
     requireRole(['teacher', 'admin'], $userRole);
 
     $students = $pdo->query(
-        'SELECT u.id, u.email, u.full_name, u.program_id, u.current_year_level, u.current_semester,
+        'SELECT u.id, u.email, u.full_name, u.program_id, u.current_year_level, u.current_semester, u.account_status, u.verified_at,
                 p.name AS program_name, u.created_at
          FROM users u
          LEFT JOIN programs p ON p.id = u.program_id
          WHERE u.role = "student"
-         ORDER BY COALESCE(u.full_name, u.email) ASC, u.id ASC'
+         ORDER BY FIELD(u.account_status, "pending", "rejected", "verified"), COALESCE(u.full_name, u.email) ASC, u.id ASC'
     )->fetchAll();
 
     jsonResponse(['ok' => true, 'students' => $students]);
+}
+
+if ($action === 'verify_account') {
+    requireMethod('POST');
+    requireCsrfForMutation();
+    requireRole(['teacher', 'admin'], $userRole);
+
+    $targetUserId = (int) ($input['user_id'] ?? 0);
+    $status = (string) ($input['status'] ?? '');
+    if ($targetUserId <= 0 || !in_array($status, ['verified', 'rejected'], true)) {
+        jsonResponse(['ok' => false, 'error' => 'Invalid verification payload'], 400);
+    }
+
+    if ($targetUserId === $userId && $status !== 'verified') {
+        jsonResponse(['ok' => false, 'error' => 'You cannot reject your own account.'], 400);
+    }
+
+    $stmt = $pdo->prepare(
+        'UPDATE users
+         SET account_status = :status,
+             verified_by = :verified_by,
+             verified_at = CURRENT_TIMESTAMP
+         WHERE id = :id'
+    );
+    $stmt->execute([
+        'status' => $status,
+        'verified_by' => $userId,
+        'id' => $targetUserId,
+    ]);
+
+    $emailStmt = $pdo->prepare('SELECT email FROM users WHERE id = :id LIMIT 1');
+    $emailStmt->execute(['id' => $targetUserId]);
+    $targetEmail = $emailStmt->fetchColumn();
+    if (is_string($targetEmail) && $targetEmail !== '') {
+        $subject = $status === 'verified' ? 'Your account has been verified' : 'Your account registration was rejected';
+        $body = $status === 'verified'
+            ? "Your School Records Database account has been verified. You can now sign in."
+            : "Your School Records Database account registration was rejected. Please contact your teacher or administrator.";
+        sendPortalEmail($targetEmail, $subject, $body);
+    }
+
+    jsonResponse(['ok' => true]);
 }
 
 if ($action === 'update_user_role') {
@@ -439,7 +484,7 @@ if ($action === 'submit_grades') {
     $semester = $profile['current_term'];
 
     if ($studentName === '' || $programId <= 0 || $semester === '') {
-        jsonResponse(['ok' => false, 'error' => 'Your student profile is incomplete. Ask an admin or teacher to assign your program and term.'], 400);
+        jsonResponse(['ok' => false, 'error' => 'Your student profile is incomplete. Please contact an admin or teacher for account verification support.'], 400);
     }
 
     if (!is_array($grades) || count($grades) === 0) {
@@ -449,9 +494,11 @@ if ($action === 'submit_grades') {
     $archiveExisting = $pdo->prepare(
         'INSERT INTO grade_submission_history (
             original_submission_id, student_name, program_id, course_id, grade, semester, status,
+            teacher_feedback, appeal_message, appeal_status,
             submitted_by, reviewed_by, original_created_at, original_updated_at
          )
          SELECT id, student_name, program_id, course_id, grade, semester, status,
+                teacher_feedback, appeal_message, appeal_status,
                 submitted_by, reviewed_by, created_at, updated_at
          FROM grade_submissions
          WHERE submitted_by = :submitted_by
@@ -467,6 +514,9 @@ if ($action === 'submit_grades') {
          ON DUPLICATE KEY UPDATE
             grade = VALUES(grade),
             status = "pending",
+            teacher_feedback = NULL,
+            appeal_message = NULL,
+            appeal_status = "none",
             submitted_by = VALUES(submitted_by),
             reviewed_by = NULL,
             updated_at = CURRENT_TIMESTAMP'
@@ -515,7 +565,7 @@ if ($action === 'student_grade_notice') {
     requireRole(['student'], $userRole);
 
     $stmt = $pdo->prepare(
-        'SELECT gs.status, gs.grade, gs.semester, gs.updated_at, c.code, c.title
+        'SELECT gs.status, gs.grade, gs.semester, gs.teacher_feedback, gs.appeal_message, gs.appeal_status, gs.updated_at, c.code, c.title
          FROM grade_submissions gs
          JOIN courses c ON c.id = gs.course_id
          WHERE gs.submitted_by = :submitted_by
@@ -536,9 +586,9 @@ if ($action === 'student_grade_history') {
     requireRole(['student'], $userRole);
 
     $stmt = $pdo->prepare(
-        'SELECT status, grade, semester, created_at, updated_at, course_code, course_title, program_name, record_type
+        'SELECT id, status, grade, semester, teacher_feedback, appeal_message, appeal_status, created_at, updated_at, course_code, course_title, program_name, record_type
          FROM (
-            SELECT gs.status, gs.grade, gs.semester, gs.created_at, gs.updated_at,
+            SELECT gs.id, gs.status, gs.grade, gs.semester, gs.teacher_feedback, gs.appeal_message, gs.appeal_status, gs.created_at, gs.updated_at,
                    c.code AS course_code, c.title AS course_title, p.name AS program_name,
                    "current" AS record_type, gs.updated_at AS sort_date, gs.id AS sort_id
             FROM grade_submissions gs
@@ -548,7 +598,7 @@ if ($action === 'student_grade_history') {
 
             UNION ALL
 
-            SELECT gsh.status, gsh.grade, gsh.semester,
+            SELECT gsh.original_submission_id AS id, gsh.status, gsh.grade, gsh.semester, gsh.teacher_feedback, gsh.appeal_message, gsh.appeal_status,
                    gsh.original_created_at AS created_at, gsh.original_updated_at AS updated_at,
                    c.code AS course_code, c.title AS course_title, p.name AS program_name,
                    "previous" AS record_type, gsh.archived_at AS sort_date, gsh.id AS sort_id
@@ -570,13 +620,46 @@ if ($action === 'student_grade_history') {
     ]);
 }
 
+if ($action === 'appeal_submission') {
+    requireMethod('POST');
+    requireCsrfForMutation();
+    requireRole(['student'], $userRole);
+
+    $id = (int) ($input['id'] ?? 0);
+    $appealMessage = trim((string) ($input['appeal_message'] ?? ''));
+    if ($id <= 0 || $appealMessage === '') {
+        jsonResponse(['ok' => false, 'error' => 'Appeal reason is required.'], 400);
+    }
+
+    $stmt = $pdo->prepare(
+        'UPDATE grade_submissions
+         SET appeal_message = :appeal_message,
+             appeal_status = "pending",
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = :id
+           AND submitted_by = :submitted_by
+           AND status = "rejected"'
+    );
+    $stmt->execute([
+        'appeal_message' => $appealMessage,
+        'id' => $id,
+        'submitted_by' => $userId,
+    ]);
+
+    if ($stmt->rowCount() === 0) {
+        jsonResponse(['ok' => false, 'error' => 'Only rejected current submissions can be appealed.'], 400);
+    }
+
+    jsonResponse(['ok' => true]);
+}
+
 if ($action === 'teacher_grade_history') {
     requireRole(['teacher', 'admin'], $userRole);
 
     $stmt = $pdo->query(
-        'SELECT status, grade, semester, created_at, updated_at, student_name, course_code, course_title, program_name, record_type
+        'SELECT status, grade, semester, teacher_feedback, appeal_message, appeal_status, created_at, updated_at, student_name, course_code, course_title, program_name, record_type
          FROM (
-            SELECT gs.status, gs.grade, gs.semester, gs.created_at, gs.updated_at,
+            SELECT gs.status, gs.grade, gs.semester, gs.teacher_feedback, gs.appeal_message, gs.appeal_status, gs.created_at, gs.updated_at,
                    gs.student_name, c.code AS course_code, c.title AS course_title, p.name AS program_name,
                    "current" AS record_type, gs.updated_at AS sort_date, gs.id AS sort_id
             FROM grade_submissions gs
@@ -585,7 +668,7 @@ if ($action === 'teacher_grade_history') {
 
             UNION ALL
 
-            SELECT gsh.status, gsh.grade, gsh.semester,
+            SELECT gsh.status, gsh.grade, gsh.semester, gsh.teacher_feedback, gsh.appeal_message, gsh.appeal_status,
                    gsh.original_created_at AS created_at, gsh.original_updated_at AS updated_at,
                    gsh.student_name, c.code AS course_code, c.title AS course_title, p.name AS program_name,
                    "previous" AS record_type, gsh.archived_at AS sort_date, gsh.id AS sort_id
@@ -606,11 +689,14 @@ if ($action === 'teacher_queue') {
     requireRole(['teacher', 'admin'], $userRole);
 
     $rows = $pdo->query(
-        'SELECT gs.id, gs.student_name, p.name AS program_name, c.code AS course_code, c.title AS course_title, c.units, gs.grade, gs.semester, gs.status, gs.created_at
+        'SELECT gs.id, gs.student_name, p.name AS program_name, c.code AS course_code, c.title AS course_title, c.units,
+                gs.grade, gs.semester, gs.status, gs.teacher_feedback, gs.appeal_message, gs.appeal_status, gs.created_at
          FROM grade_submissions gs
          JOIN programs p ON p.id = gs.program_id
          JOIN courses c ON c.id = gs.course_id
-         ORDER BY FIELD(gs.status, "pending", "rejected", "approved"), gs.created_at DESC'
+         ORDER BY FIELD(gs.status, "pending", "rejected", "approved"),
+                  FIELD(gs.appeal_status, "pending", "none", "resolved"),
+                  gs.created_at DESC'
     )->fetchAll();
 
     jsonResponse(['ok' => true, 'items' => $rows]);
@@ -623,13 +709,26 @@ if ($action === 'review_submission') {
 
     $id = (int) ($input['id'] ?? 0);
     $status = (string) ($input['status'] ?? '');
+    $feedback = trim((string) ($input['teacher_feedback'] ?? ''));
     if ($id <= 0 || !in_array($status, ['approved', 'rejected'], true)) {
         jsonResponse(['ok' => false, 'error' => 'Invalid review payload'], 400);
     }
+    if ($status === 'rejected' && $feedback === '') {
+        jsonResponse(['ok' => false, 'error' => 'Feedback is required when rejecting a grade.'], 400);
+    }
 
-    $stmt = $pdo->prepare('UPDATE grade_submissions SET status = :status, reviewed_by = :reviewed_by WHERE id = :id');
+    $stmt = $pdo->prepare(
+        'UPDATE grade_submissions
+         SET status = :status,
+             teacher_feedback = :teacher_feedback,
+             appeal_status = CASE WHEN :status_case = "approved" OR appeal_status = "pending" THEN "resolved" ELSE appeal_status END,
+             reviewed_by = :reviewed_by
+         WHERE id = :id'
+    );
     $stmt->execute([
         'status' => $status,
+        'status_case' => $status,
+        'teacher_feedback' => $feedback !== '' ? $feedback : null,
         'reviewed_by' => $userId,
         'id' => $id,
     ]);

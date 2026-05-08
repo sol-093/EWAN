@@ -90,7 +90,7 @@ portalRenderStart(
       const el = document.getElementById('student-assignment');
       const profile = state.profile;
       if (!profile || !profile.full_name || !profile.program_name || !profile.current_year_level || !profile.current_semester) {
-        el.innerHTML = '<p class="small error">Your student profile is incomplete. Ask an admin or teacher to update it.</p>';
+        el.innerHTML = '<p class="small error">Your student profile is incomplete. Please contact an admin or teacher for account verification support.</p>';
         return;
       }
       el.innerHTML = '<div class="table-wrap"><table><tbody><tr>' +
@@ -119,7 +119,7 @@ portalRenderStart(
     async function loadStudentCourses() {
       const profile = state.profile;
       if (!profile || !profile.program_id || !profile.current_year_level || !profile.current_semester || !profile.full_name) {
-        setMessage('Your student profile is incomplete. Ask an admin or teacher to update it.');
+        setMessage('Your student profile is incomplete. Please contact an admin or teacher for account verification support.');
         return;
       }
       const semester = (yearLevelLabels[profile.current_year_level] || String(profile.current_year_level)) + ' - ' + profile.current_semester;

@@ -44,10 +44,12 @@ portalRenderStart(
           <tbody id="teacher-dashboard-table"></tbody>
         </table>
       </div>
+      <div id="teacher-dashboard-pagination" class="row" style="margin-top:0.85rem;"></div>
       <div id="teacher-message" class="message"></div>
     </section>
   <script>
     const csrfToken = <?php echo json_encode($csrfToken); ?>;
+    const state = { students: [], page: 1, perPage: 10 };
 
     async function api(action) {
       const response = await fetch('index.php?page=api&action=' + encodeURIComponent(action), { headers: { 'X-CSRF-Token': csrfToken } });
@@ -74,6 +76,33 @@ portalRenderStart(
       el.className = 'message ' + (ok ? 'success' : 'error');
     }
 
+    function renderDashboardRows() {
+      const totalPages = Math.max(1, Math.ceil(state.students.length / state.perPage));
+      state.page = Math.min(Math.max(1, state.page), totalPages);
+      const start = (state.page - 1) * state.perPage;
+      const rows = state.students.slice(start, start + state.perPage);
+      document.getElementById('teacher-dashboard-table').innerHTML = rows.length
+        ? rows.map(row =>
+            '<tr><td>' + escapeHtml(row.student_name) + '</td><td>' + escapeHtml(row.program_name) + '</td><td>' + escapeHtml(row.total_submissions) + '</td><td>' + escapeHtml(row.approved_submissions) + '</td><td>' + escapeHtml(row.pending_submissions) + '</td></tr>'
+          ).join('')
+        : '<tr><td colspan="5">No student submissions yet.</td></tr>';
+
+      const pager = document.getElementById('teacher-dashboard-pagination');
+      if (state.students.length <= state.perPage) {
+        pager.innerHTML = '';
+        return;
+      }
+      pager.innerHTML =
+        '<button class="compact btn-secondary" onclick="changePage(-1)" ' + (state.page <= 1 ? 'disabled' : '') + '>Previous</button>' +
+        '<span class="small">Page ' + state.page + ' of ' + totalPages + '</span>' +
+        '<button class="compact btn-secondary" onclick="changePage(1)" ' + (state.page >= totalPages ? 'disabled' : '') + '>Next</button>';
+    }
+
+    function changePage(delta) {
+      state.page += delta;
+      renderDashboardRows();
+    }
+
     async function refresh() {
       const data = await api('teacher_dashboard');
       const counts = data.counts || { pending: 0, approved: 0, rejected: 0 };
@@ -82,12 +111,8 @@ portalRenderStart(
         '<div class="metric-card"><span class="metric-label">Approved</span><span class="metric-value">' + escapeHtml(counts.approved) + '</span></div>' +
         '<div class="metric-card"><span class="metric-label">Rejected</span><span class="metric-value">' + escapeHtml(counts.rejected) + '</span></div>';
 
-      const students = data.students || [];
-      document.getElementById('teacher-dashboard-table').innerHTML = students.length
-        ? students.map(row =>
-            '<tr><td>' + escapeHtml(row.student_name) + '</td><td>' + escapeHtml(row.program_name) + '</td><td>' + escapeHtml(row.total_submissions) + '</td><td>' + escapeHtml(row.approved_submissions) + '</td><td>' + escapeHtml(row.pending_submissions) + '</td></tr>'
-          ).join('')
-        : '<tr><td colspan="5">No student submissions yet.</td></tr>';
+      state.students = data.students || [];
+      renderDashboardRows();
     }
 
     refresh().catch(error => setMessage(error.message));

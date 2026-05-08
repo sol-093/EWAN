@@ -11,7 +11,10 @@ if (isset($_SESSION['user_id'])) {
 require_once __DIR__ . '/../core/db.php';
 
 $message = '';
-$successMessage = isset($_GET['registered']) ? 'Registration complete. You can sign in now.' : '';
+$successMessage = isset($_GET['registered']) ? 'Registration complete. Please wait for teacher or admin verification before signing in.' : '';
+if (isset($_GET['reset'])) {
+    $successMessage = 'Password updated. You can sign in now.';
+}
 $csrfToken = getCsrfToken();
 $email = '';
 
@@ -33,13 +36,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($message === '' && ($email === '' || $password === '')) {
         $message = 'Please enter both email and password.';
     } elseif ($message === '') {
-        $stmt = $pdo->prepare('SELECT id, email, password_hash, role FROM users WHERE email = :email LIMIT 1');
+        $stmt = $pdo->prepare('SELECT id, email, password_hash, role, account_status FROM users WHERE email = :email LIMIT 1');
         $stmt->execute(['email' => $email]);
         $user = $stmt->fetch();
 
         if (!$user || !password_verify($password, $user['password_hash'])) {
             recordLoginFailure($email);
             $message = 'Invalid email or password.';
+        } elseif (($user['account_status'] ?? 'pending') !== 'verified') {
+            $message = 'Your account is still waiting for teacher or admin verification.';
         } else {
             session_regenerate_id(true);
             clearLoginFailures($email);
@@ -87,6 +92,7 @@ portalRenderAuthStart(
             <button type="submit">Sign In</button>
             <a class="btn btn-secondary" href="index.php?page=register">Create an account</a>
           </div>
+          <p class="small" style="margin-top:0.75rem;"><a class="inline-link" href="index.php?page=forgot_password">Forgot password?</a></p>
 
           <div class="message<?php echo $message !== '' ? ' error' : ''; ?>">
             <?php echo htmlspecialchars($message, ENT_QUOTES, 'UTF-8'); ?>
